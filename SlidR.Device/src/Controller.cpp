@@ -2,8 +2,11 @@
 #include <FreeRTOS.h>
 #include <FS.h>
 #include <LittleFS.h>
+#include <SPI.h>
 #include <algorithm>
 #include <string>
+
+SPIClass spi(FSPI);
 
 Controller::Controller()
     : _is_awake(true),
@@ -52,22 +55,37 @@ void Controller::create_tasks() {
 }
 
 void Controller::init_hardware() {
-    // TODO: Temporarily using software SPI
-    // SPI.end();
-    // SPI.begin(_device_config.spiClkPin, -1, _device_config.spiDataPin, -1);
+    spi.end();
+    spi.begin(
+        _device_config->spi_clk_pin,  // sck
+        -1,                           // miso
+        _device_config->spi_data_pin, // mosi
+        -1                            // ss/cs
+    );
 
     pinMode(_device_config->tft_backlight_pin, OUTPUT);
     analogWrite(_device_config->tft_backlight_pin, 255); // TODO: Ensure backlight is off during setup
 
     for (auto& segment : _device_config->segments) {
         pinMode(segment.pot_pin, INPUT);
-        pinMode(segment.tft_cs_pin, OUTPUT);
-        digitalWrite(segment.tft_cs_pin, HIGH);
     }
 
     _segments.clear();
     for (size_t i = 0; i < _device_config->segments.size(); i++) {
-        _segments.push_back(Segment::create_and_init(i, _device_config->segments[i], _communication, _device_config->tft_dc_pin, _device_config->spi_data_pin, _device_config->spi_clk_pin));
+        _segments.push_back(std::make_unique<Segment>(
+            i,
+            _device_config->segments[i],
+            _communication,
+            _device_config->tft_dc_pin,
+            &spi
+        ));
+    }
+    for (auto& segment : _segments) {
+        segment->begin();
+    }
+    for (auto& segment : _segments) {
+        segment->load_and_display_image();
+        segment->enable_logs(true);
     }
 }
 
@@ -154,22 +172,29 @@ void Controller::apply_config_changes(const DeviceConfig &new_config) {
 
     if (new_config.segments.size() > _device_config->segments.size()) {
         for (size_t i = _device_config->segments.size(); i < new_config.segments.size(); i++) {
-            _segments.push_back(Segment::create_and_init(i, new_config.segments[i], _communication, new_config.tft_dc_pin, new_config.spi_data_pin, new_config.spi_clk_pin));
+            _segments.push_back(Segment::create_and_init(i, new_config.segments[i], _communication, new_config.tft_dc_pin, &spi));
         }
     } else if (new_config.segments.size() < _device_config->segments.size()) {
         _segments.resize(new_config.segments.size());
     }
 
-    // For SPI changes all segments need to be reinitialized
     if (new_config.spi_clk_pin != _device_config->spi_clk_pin ||
-        new_config.spi_data_pin != _device_config->spi_data_pin ||
-        new_config.tft_dc_pin != _device_config->tft_dc_pin ||
-        new_config.spi_speed_hz != _device_config->spi_speed_hz) {
-        _segments.clear();
-        for (ssize_t i = new_config.segments.size() - 1; i >= 0; i--) {
-            _segments.push_back(Segment::create_and_init(i, new_config.segments[i], _communication, new_config.tft_dc_pin, new_config.spi_data_pin, new_config.spi_clk_pin));
+        new_config.spi_data_pin != _device_config->spi_data_pin) {
+        spi.end();
+        spi.begin(
+            new_config.spi_clk_pin,  // sck
+            -1,                      // miso
+            new_config.spi_data_pin, // mosi
+            -1                       // ss/cs
+        );
+    }
+    if (new_config.spi_speed_hz != _device_config->spi_speed_hz) {
+        spi.setFrequency(new_config.spi_speed_hz);
+    }
+    if (new_config.tft_dc_pin != _device_config->tft_dc_pin) {
+        for (auto& segment : _segments) {
+            segment->set_dc_pin(new_config.tft_dc_pin);
         }
-        return;
     }
 
     for (size_t i = 0; i < new_config.segments.size(); i++) {
@@ -179,7 +204,7 @@ void Controller::apply_config_changes(const DeviceConfig &new_config) {
         if (i >= _device_config->segments.size()) break;
 
         if (new_seg.tft_cs_pin != old_seg.tft_cs_pin) {
-            _segments[i] = Segment::create_and_init(i, new_seg, _communication, new_config.tft_dc_pin, new_config.spi_data_pin, new_config.spi_clk_pin);
+            _segments[i] = Segment::create_and_init(i, new_seg, _communication, new_config.tft_dc_pin, &spi);
             continue;
         }
 

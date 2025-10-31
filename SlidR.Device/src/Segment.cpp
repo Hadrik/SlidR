@@ -4,44 +4,49 @@
 #include <LittleFS.h>
 #include <string>
 
-Segment::Segment(uint8_t index, const SegmentConfig &cfg, Communication &comm, uint8_t dc, uint8_t mosi, uint8_t sck)
+#define LOG(msg) if (_send_logs) { _communication.send_log(msg); }
+
+Segment::Segment(uint8_t index, const SegmentConfig &cfg, Communication &comm, uint8_t dc, SPIClass* spiClass)
     : _image_path(Segment::get_image_path(index)), _index(index), _config(cfg), _communication(comm), _last_pot_value(0), _last_vol_percent(0) {
     _display_mutex = xSemaphoreCreateMutex();
-    _tft = std::make_unique<ST7735>(cfg.tft_cs_pin, dc, mosi, sck, -1);
+    _tft = std::make_unique<ST7735>(cfg.tft_cs_pin, spiClass, dc, -1);
+    _send_logs = false;
 }
 
-std::unique_ptr<Segment> Segment::create_and_init(uint8_t index, const SegmentConfig &cfg, Communication &comm, uint8_t dc, uint8_t mosi, uint8_t sck) {
+std::unique_ptr<Segment> Segment::create_and_init(uint8_t index, const SegmentConfig &cfg, Communication &comm, uint8_t dc, SPIClass* spiClass) {
     auto seg = std::make_unique<Segment>(
         index,
         cfg,
         comm,
         dc,
-        mosi,
-        sck
+        spiClass
     );
     seg->begin();
     seg->load_and_display_image();
     return seg;
 }
 
+void Segment::set_dc_pin(uint8_t dc) {
+    _tft->setDcPin(dc);
+}
+
 void Segment::begin() {
-    _tft->setSPISpeed(100000);
     _tft->initR(INITR_144GREENTAB);
     _tft->setRotation(0);
     _tft->setColRowStart(2, 1);
-    _tft->fillScreen(ST7735_YELLOW);
+    _tft->fillScreen(ST7735_BLACK);
     _tft->invertDisplay(true);
 }
 
 bool Segment::load_and_display_image() {
     if (xSemaphoreTake(_display_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
-        _communication.send_log("Failed to acquire display mutex");
+        LOG("Failed to acquire display mutex");
         return false;
     }
 
     File img_file = LittleFS.open(_image_path.c_str(), "r");
     if (!img_file) {
-        _communication.send_log(("Failed to open image: '" + _image_path + "'").c_str());
+        LOG(("Failed to open image: '" + _image_path + "'").c_str());
         xSemaphoreGive(_display_mutex);
         return false;
     }
@@ -51,9 +56,9 @@ bool Segment::load_and_display_image() {
     img_file.read((uint8_t*)&img_width, sizeof(img_width));
     img_file.read((uint8_t*)&img_height, sizeof(img_height));
 
-    _communication.send_log(("Loading image: '" + _image_path + "' (" + std::to_string(img_width) + "x" + std::to_string(img_height) + ")\n").c_str());
+    LOG(("Loading image: '" + _image_path + "' (" + std::to_string(img_width) + "x" + std::to_string(img_height) + ")\n").c_str());
 
-    _tft->fillScreen(ST7735_CYAN);
+    // _tft->fillScreen(ST7735_CYAN);
 
     constexpr size_t CHUNK_SIZE = 256;
     uint16_t pixel_buffer[CHUNK_SIZE];
@@ -67,7 +72,7 @@ bool Segment::load_and_display_image() {
         size_t bytes_to_read = pixels_to_read * sizeof(uint16_t);
         size_t read_bytes = img_file.read((uint8_t*)pixel_buffer, bytes_to_read);
         if (read_bytes != bytes_to_read) {
-            _communication.send_log(("Read error: expected " + std::to_string(bytes_to_read) + ", got " + std::to_string(read_bytes)).c_str());
+            LOG(("Read error: expected " + std::to_string(bytes_to_read) + ", got " + std::to_string(read_bytes)).c_str());
             _tft->endWrite();
             img_file.close();
             xSemaphoreGive(_display_mutex);
@@ -80,7 +85,7 @@ bool Segment::load_and_display_image() {
     _tft->endWrite();
     img_file.close();
 
-    _communication.send_log(("Image '" + _image_path + "' loaded successfully").c_str());
+    LOG(("Image '" + _image_path + "' loaded successfully").c_str());
 
     xSemaphoreGive(_display_mutex);    
     return true;
