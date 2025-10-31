@@ -1,4 +1,5 @@
 #include "Communication.h"
+#include "Segment.h"
 #include <Arduino.h>
 
 Communication::Communication() {
@@ -15,7 +16,7 @@ void Communication::begin() {
 }
 
 void Communication::update() {
-    if (_in_packet && (millis() - _last_in_data > PACKET_TIMEOUT_MS)) {
+    if (_in_packet && (millis() - _last_in_data_time > PACKET_TIMEOUT_MS)) {
         send_log("Packet timeout");
         _in_packet = false;
         _rx_index = 0;
@@ -27,12 +28,12 @@ void Communication::update() {
         if (!_in_packet && byte == START_BYTE) {
             _rx_index = 0;
             _in_packet = true;
-            _last_in_data = millis();
+            _last_in_data_time = millis();
             continue;
         }
 
         if (_in_packet) {
-            _last_in_data = millis();
+            _last_in_data_time = millis();
             _rx_buffer[_rx_index++] = byte;
 
             if (_rx_index == 3) {
@@ -50,13 +51,12 @@ void Communication::update() {
                 uint8_t calc_checksum = calculate_checksum(_rx_buffer, _rx_index - 1);
 
                 if (recv_checksum == calc_checksum) {
+                    _last_in_packet_time = millis();
                     Command cmd = static_cast<Command>(_rx_buffer[0]);
                     std::vector<uint8_t> data(_rx_buffer + 3, _rx_buffer + 3 + _expected_size);
                     packet_t packet{cmd, data};
 
-                    if (transfer_in_progress() && cmd == Command::ACK) {
-                        xSemaphoreGive(_transfer_waiting_for_ack);
-                    } else if (on_packet) {
+                    if (!handle_file_transfer(packet)) {
                         on_packet(packet);
                     }
 
@@ -101,9 +101,90 @@ void Communication::send_log(const char* message) {
     send_packet(Command::LOG_MESSAGE, reinterpret_cast<const uint8_t*>(message), strlen(message));
 }
 
-bool Communication::start_file_upload(const std::string& path, uint32_t total_size) {
-    // TODO!!: Handle all file transfer logic inside here
-    // Emit `on_transfer_complete` when done
+bool Communication::handle_file_transfer(const packet_t &packet) {
+    switch (packet.command) {
+        case Command::UPLOAD_IMAGE_START: {
+            if (packet.data.size() != 5) {
+                send_err(ErrorCode::INVALID_DATA);
+                break;
+            }
+
+            uint8_t segment_index = packet.data.at(0);
+            uint32_t total_bytes;
+            memcpy(&total_bytes, packet.data.data() + 1, 4);
+            std::string image_path = Segment::get_image_path(segment_index);
+
+            if (start_file_upload(image_path, total_bytes)) {
+                send_packet(Command::ACK);
+            }
+
+            break;
+        }
+
+        case Command::UPLOAD_IMAGE_DATA: {
+            if (!transfer_in_progress()) {
+                send_log("Received UPLOAD_IMAGE_DATA without active transfer\n");
+                send_err(ErrorCode::INVALID_COMMAND);
+                break;
+            }
+
+            if (receive_file_data(packet.data)) {
+                send_packet(Command::ACK);
+            }
+
+            break;
+        }
+        
+        case Command::UPLOAD_IMAGE_END: {
+            if (!transfer_in_progress()) {
+                send_log("Received UPLOAD_IMAGE_END without active transfer\n");
+                send_err(ErrorCode::INVALID_COMMAND);
+                break;
+            }
+
+            if (_upload_bytes_received != _upload_total_size) {
+                send_log("Upload size mismatch: received " + std::to_string(_upload_bytes_received) + " of " + std::to_string(_upload_total_size) + "\n");
+                cancel_transfer();
+                send_err(ErrorCode::INVALID_COMMAND);
+                break;
+            }
+            finish_file_transfer();
+            send_packet(Command::ACK);
+            
+            if (on_file_received) {
+                on_file_received(_upload_path);
+            }
+            
+            break;
+        }
+
+        case Command::DOWNLOAD_IMAGE_START: {
+            if (packet.data.size() != 1) {
+                send_err(ErrorCode::INVALID_DATA);
+                break;
+            }
+            uint8_t segment_index = packet.data.at(0);
+            std::string image_path = Segment::get_image_path(segment_index);
+            start_file_download(image_path);
+            break;
+        }
+
+        case Command::ACK: {
+            if (!transfer_in_progress()) {
+                return false;
+            }
+            xSemaphoreGive(_transfer_waiting_for_ack);
+            return true;
+        }
+
+        default:
+            return false;
+    }
+
+    return true;
+}
+
+bool Communication::start_file_upload(const std::string &path, uint32_t total_size) {
     if (transfer_in_progress()) {
         send_err(ErrorCode::TRANSFER_IN_PROGRESS);
         return false;
@@ -116,18 +197,7 @@ bool Communication::start_file_upload(const std::string& path, uint32_t total_si
     }
 
     _upload_path = path;
-    xSemaphoreGive(_transfer_watchdog_reset);
-    xTaskCreate(
-        [](void* param) {
-            static_cast<Communication*>(param)->transfer_watchdog_task(nullptr);
-            vTaskDelete(nullptr);
-        },
-        "Transfer Watchdog Task",
-        1024,
-        this,
-        1,
-        &_transfer_watchdog_task_handle
-    );
+    start_transfer_watchdog();
 
     _upload_total_size = total_size;
     _upload_bytes_received = 0;
@@ -137,15 +207,24 @@ bool Communication::start_file_upload(const std::string& path, uint32_t total_si
 bool Communication::receive_file_data(const std::vector<uint8_t>& data) {
     if (!_file) {
         finish_file_transfer();
+        send_log("Received UPLOAD_IMAGE_DATA without active transfer\n");
         send_err(ErrorCode::FILE_ERROR);
         return false;
     }
+
     xSemaphoreGive(_transfer_watchdog_reset);
-
     size_t written = _file.write(data.data(), data.size());
-    _upload_bytes_received += written;
+    
+    if (written != data.size()) {
+        send_log("Failed to write all data to file - written: " + std::to_string(written) + ", expected: " + std::to_string(data.size()) + "\n");
+        stop_transfer_watchdog();
+        cancel_transfer();
+        send_err(ErrorCode::FILE_ERROR);
+        return false;
+    }
 
-    return written == data.size();
+    _upload_bytes_received += written;
+    return true;
 }
 
 void Communication::start_file_download(const std::string& path) {
@@ -160,7 +239,7 @@ void Communication::start_file_download(const std::string& path) {
     xSemaphoreGive(_transfer_watchdog_reset);
     xTaskCreate(
         [](void* param) {
-            static_cast<Communication*>(param)->send_image();
+            static_cast<Communication*>(param)->send_image_task();
             vTaskDelete(nullptr);
         },
         "Send Image Task",
@@ -172,10 +251,7 @@ void Communication::start_file_download(const std::string& path) {
 }
 
 void Communication::finish_file_transfer() {
-    if (_transfer_watchdog_task_handle) {
-        vTaskDelete(_transfer_watchdog_task_handle);
-        _transfer_watchdog_task_handle = nullptr;
-    }
+    stop_transfer_watchdog();
 
     if (_file) {
         _file.close();
@@ -192,7 +268,6 @@ void Communication::finish_file_transfer() {
             send_err(ErrorCode::FILE_ERROR);
             return;
         }
-        _upload_path.clear();
     }
 }
 
@@ -222,26 +297,32 @@ uint8_t Communication::calculate_checksum(const uint8_t *data, size_t size) {
     return checksum;
 }
 
-void Communication::send_image() {
+void Communication::send_image_task() {
     if (!_file) {
         send_log("No file opened for sending image\n");
         send_err(ErrorCode::FILE_ERROR);
         return;
     }
 
-    constexpr size_t CHUNK_SIZE = 512;
-    uint8_t buffer[CHUNK_SIZE];
+    uint8_t buffer[TRANSFER_SEND_MAX_CHUNK_SIZE];
 
     while (_file.available()) {
-        size_t to_read = std::min(CHUNK_SIZE, static_cast<size_t>(_file.size() - _file.position()));
+        size_t to_read = std::min(TRANSFER_SEND_MAX_CHUNK_SIZE, static_cast<size_t>(_file.size() - _file.position()));
+        if (to_read == 0) {
+            break;
+        }
+
         size_t read_bytes = _file.read(buffer, to_read);
-        if (read_bytes > 0) {
+        if (read_bytes != to_read) {
+            send_log("Failed to read expected number of bytes from file\n");
+            send_err(ErrorCode::FILE_ERROR);
+            _file.close();
+            return;
+        } else {
             send_packet(Command::DOWNLOAD_IMAGE_DATA, buffer, read_bytes);
             if (xSemaphoreTake(_transfer_waiting_for_ack, pdMS_TO_TICKS(PACKET_TIMEOUT_MS)) == pdTRUE) {
                 xSemaphoreGive(_transfer_watchdog_reset);
             }
-        } else {
-            break;
         }
     }
 
@@ -252,12 +333,34 @@ void Communication::send_image() {
 void Communication::cancel_transfer() {
     if (_file) {
         _file.close();
-        _upload_path.clear();
+        LittleFS.remove(UPLOAD_TEMP_PATH);
+    }
+    _upload_path.clear();
+}
+
+void Communication::start_transfer_watchdog() {
+    xSemaphoreGive(_transfer_watchdog_reset);
+    xTaskCreate(
+        [](void* param) {
+            static_cast<Communication*>(param)->transfer_watchdog_task();
+            vTaskDelete(nullptr);
+        },
+        "Transfer Watchdog Task",
+        1024,
+        this,
+        1,
+        &_transfer_watchdog_task_handle
+    );
+}
+
+void Communication::stop_transfer_watchdog() {
+    if (_transfer_watchdog_task_handle) {
+        vTaskDelete(_transfer_watchdog_task_handle);
+        _transfer_watchdog_task_handle = nullptr;
     }
 }
 
-/// @brief Takes `_transfer_watchdog_reset` semaphore every `PACKET_TIMEOUT_MS` milliseconds.
-void Communication::transfer_watchdog_task(void *param) {
+void Communication::transfer_watchdog_task() {
     while (true) {
         if (xSemaphoreTake(_transfer_watchdog_reset, pdMS_TO_TICKS(PACKET_TIMEOUT_MS)) != pdTRUE) {
             send_err(ErrorCode::TRANSFER_TIMEOUT);

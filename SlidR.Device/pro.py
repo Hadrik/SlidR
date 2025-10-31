@@ -31,17 +31,18 @@ class Command(IntEnum):
 class ErrorCode(IntEnum):
     NONE = 0x00
     INVALID_COMMAND = 0x01
-    CHECKSUM_ERROR = 0x02
-    FILE_ERROR = 0x03
-    INVALID_CONFIG = 0x04
-    BUFFER_OVERFLOW = 0x05
-    TRANSFER_IN_PROGRESS = 0x06
-    TRANSFER_TIMEOUT = 0x07
+    INVALID_DATA = 0x02
+    CHECKSUM_ERROR = 0x03
+    FILE_ERROR = 0x04
+    INVALID_CONFIG = 0x05
+    BUFFER_OVERFLOW = 0x06
+    TRANSFER_IN_PROGRESS = 0x07
+    TRANSFER_TIMEOUT = 0x08
 
 class Packet:
     command: Command
     length: int
-    data: bytes | None
+    data: bytes
     checksum: bytes
 
 class Serial:
@@ -364,7 +365,7 @@ class App:
             pixels = img.load()
             for y in range(img_size):
                 for x in range(img_size):
-                    r, g, b = pixels[x, y]
+                    r, g, b = pixels[x, y] # type: ignore
                     # Convert 8-bit RGB to RGB565
                     r5 = (r >> 3) & 0x1F
                     g6 = (g >> 2) & 0x3F

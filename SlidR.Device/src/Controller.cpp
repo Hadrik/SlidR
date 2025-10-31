@@ -6,13 +6,8 @@
 #include <string>
 
 Controller::Controller()
-    : _last_ping_time(0),
-      _is_awake(true),
-      _backlight_level(255),
-      _spi_mutex(nullptr)
-{
-    _spi_mutex = xSemaphoreCreateMutex();
-}
+    : _is_awake(true),
+      _backlight_level(255) {}
 
 void Controller::begin() {
     _communication.begin();
@@ -36,6 +31,9 @@ void Controller::begin() {
 
     _communication.on_packet = [this](Communication::packet_t packet) {
         handle_command(packet);
+    };
+    _communication.on_file_received = [this](const std::string& path) {
+        on_file_received(path);
     };
 
     create_tasks();
@@ -68,13 +66,12 @@ void Controller::init_hardware() {
     }
 
     _segments.clear();
-    for (ssize_t i = _device_config->segments.size() - 1; i >= 0; i--) {
+    for (size_t i = 0; i < _device_config->segments.size(); i++) {
         _segments.push_back(Segment::create_and_init(i, _device_config->segments[i], _communication, _device_config->tft_dc_pin, _device_config->spi_data_pin, _device_config->spi_clk_pin));
     }
 }
 
 void Controller::handle_command(Communication::packet_t packet) {
-    _last_ping_time = millis();
     if (!_is_awake) {
         wake_up();
     }
@@ -112,50 +109,6 @@ void Controller::handle_command(Communication::packet_t packet) {
             _config_loader.save(*_device_config);
 
             _communication.send_packet(Command::ACK);
-            break;
-        }
-
-        case Command::UPLOAD_IMAGE_START: {
-            // TODO!!: Move all file transfer commands to Communication class
-            uint8_t segment_index = packet.data[0];
-            uint32_t totalBytes;
-            memcpy(&totalBytes, packet.data.data() + 1, 4);
-            std::string image_path = Segment::get_image_path(segment_index);
-            _communication.send_log(("Receiving image [" + std::to_string(segment_index) + "] '" + image_path + "' (" + std::to_string(totalBytes) + ")B\n").c_str());
-
-            if (_communication.start_file_upload(image_path, totalBytes)) {
-                _communication.send_packet(Command::ACK);
-            } else {
-                _communication.send_err(ErrorCode::FILE_ERROR);
-            }
-            break;
-        }
-
-        case Command::UPLOAD_IMAGE_DATA: {
-            if (_communication.receive_file_data(packet.data)) {
-                _communication.send_packet(Command::ACK);
-            } else {
-                _communication.send_err(ErrorCode::FILE_ERROR);
-            }
-            break;
-        }
-
-        case Command::UPLOAD_IMAGE_END: {
-            _communication.finish_file_transfer();
-            _communication.send_packet(Command::ACK);
-
-            // TODO: Only reload the affected segment
-            for (size_t i = 0; i < _segments.size(); i++) {
-                _segments[i]->load_and_display_image();
-            }
-            break;
-        }
-
-        case Command::DOWNLOAD_IMAGE_START: {
-            uint8_t segment_index = packet.data[0];
-
-            _communication.send_packet(Command::ACK);
-            _communication.start_file_download(Segment::get_image_path(segment_index));
             break;
         }
 
@@ -242,6 +195,15 @@ void Controller::apply_config_changes(const DeviceConfig &new_config) {
     }
 }
 
+void Controller::on_file_received(const std::string &path) {
+    for (uint8_t i = 0; i < _segments.size(); i++) {
+        if (path == Segment::get_image_path(i)) {
+            _segments[i]->load_and_display_image();
+            break;
+        }
+    }
+}
+
 void Controller::wake_up() {
     _is_awake = true;
     analogWrite(_device_config->tft_backlight_pin, _backlight_level);
@@ -286,7 +248,7 @@ void Controller::watchdog_task(void *param) {
     auto* controller = static_cast<Controller*>(param);
     while (true) {
         if (controller->_is_awake &&
-            (millis() - controller->_last_ping_time) > Controller::PING_TIMEOUT_MS) {
+            (millis() - controller->_communication.last_packet_time()) > Controller::PING_TIMEOUT_MS) {
             controller->sleep();
         }
         vTaskDelay(pdMS_TO_TICKS(1000));

@@ -33,12 +33,13 @@ enum class Command : uint8_t {
 enum class ErrorCode : uint8_t {
     NONE = 0x00,
     INVALID_COMMAND = 0x01,
-    CHECKSUM_ERROR = 0x02,
-    FILE_ERROR = 0x03,
-    INVALID_CONFIG = 0x04,
-    BUFFER_OVERFLOW = 0x05,
-    TRANSFER_IN_PROGRESS = 0x06,
-    TRANSFER_TIMEOUT = 0x07
+    INVALID_DATA = 0x02,
+    CHECKSUM_ERROR = 0x03,
+    FILE_ERROR = 0x04,
+    INVALID_CONFIG = 0x05,
+    BUFFER_OVERFLOW = 0x06,
+    TRANSFER_IN_PROGRESS = 0x07,
+    TRANSFER_TIMEOUT = 0x08
 };
 
 #endif // PROTOCOL_CONSTANTS_H
