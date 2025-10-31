@@ -1,0 +1,44 @@
+#ifndef PROTOCOL_CONSTANTS_H
+#define PROTOCOL_CONSTANTS_H
+
+#pragma once
+
+#include <cinttypes>
+
+constexpr uint8_t START_BYTE = 0xAA;
+
+enum class Command : uint8_t {
+    PING = 0x01,
+    PONG = 0x02,
+    SET_CONFIG = 0x03,
+    GET_CONFIG = 0x04,
+    CONFIG_DATA = 0x05,
+    DEFAULT_CONFIG = 0x06,
+    UPLOAD_IMAGE_START = 0x07,
+    UPLOAD_IMAGE_DATA = 0x08,
+    UPLOAD_IMAGE_END = 0x09,
+    DOWNLOAD_IMAGE_START = 0x0A,
+    DOWNLOAD_IMAGE_DATA = 0x0B,
+    DOWNLOAD_IMAGE_END = 0x0C,
+    ACK = 0x0D,
+    SLIDER_VALUE = 0x0E,
+    SET_BACKLIGHT = 0x0F,
+    ERROR_CMD = 0x10,
+    GET_STATUS = 0x11,
+    STATUS_DATA = 0x12,
+    LOG_MESSAGE = 0x13,
+    CHANGE_BAUDRATE = 0x14
+};
+
+enum class ErrorCode : uint8_t {
+    NONE = 0x00,
+    INVALID_COMMAND = 0x01,
+    CHECKSUM_ERROR = 0x02,
+    FILE_ERROR = 0x03,
+    INVALID_CONFIG = 0x04,
+    BUFFER_OVERFLOW = 0x05,
+    TRANSFER_IN_PROGRESS = 0x06,
+    TRANSFER_TIMEOUT = 0x07
+};
+
+#endif // PROTOCOL_CONSTANTS_H
