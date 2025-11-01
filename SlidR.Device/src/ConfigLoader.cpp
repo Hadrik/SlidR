@@ -53,6 +53,7 @@ std::shared_ptr<DeviceConfig> ConfigLoader::from_bytes(const std::vector<uint8_t
     GET(config->spi_data_pin);
     GET(config->tft_dc_pin);
     GET(config->tft_backlight_pin);
+    GET(config->tft_backlight_value);
     GET(config->spi_speed_hz);
     GET(config->baudrate);
     GET(config->wait_for_serial);
@@ -87,6 +88,7 @@ std::vector<uint8_t> ConfigLoader::to_bytes(const DeviceConfig &config) {
     append(&config.spi_data_pin, sizeof(config.spi_data_pin));
     append(&config.tft_dc_pin, sizeof(config.tft_dc_pin));
     append(&config.tft_backlight_pin, sizeof(config.tft_backlight_pin));
+    append(&config.tft_backlight_value, sizeof(config.tft_backlight_value));
     append(&config.spi_speed_hz, sizeof(config.spi_speed_hz));
     append(&config.baudrate, sizeof(config.baudrate));
     append(&config.wait_for_serial, sizeof(config.wait_for_serial));

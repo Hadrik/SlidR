@@ -243,12 +243,13 @@ class App:
             out += f"    SPI Dta: {int.from_bytes(packet.data[5].to_bytes(1), signed=True)}\n"
             out += f"    TFT Dc: {packet.data[6]}\n"
             out += f"    TFT Bl: {packet.data[7]}\n"
-            out += f"    SPI Freq: {int.from_bytes(packet.data[8:12], byteorder='little')}\n"
-            out += f"    Baudrate: {int.from_bytes(packet.data[12:16], byteorder='little')}\n"
-            out += f"    Wait for serial: {packet.data[16] != 0}\n"
-            out += f"    Do sleep: {packet.data[17] != 0}\n"
-            out += f"    Segments: {packet.data[18]}\n"
-            pos = 19
+            out += f"    Backlight: {packet.data[8]}\n"
+            out += f"    SPI Freq: {int.from_bytes(packet.data[9:13], byteorder='little')}\n"
+            out += f"    Baudrate: {int.from_bytes(packet.data[13:17], byteorder='little')}\n"
+            out += f"    Wait for serial: {packet.data[17] != 0}\n"
+            out += f"    Do sleep: {packet.data[18] != 0}\n"
+            out += f"    Segments: {packet.data[19]}\n"
+            pos = 20
             while pos < packet.length - 1:
                 tft_cs = packet.data[pos]
                 pot = packet.data[pos + 1]

@@ -8,9 +8,7 @@
 
 SPIClass spi(FSPI);
 
-Controller::Controller()
-    : _is_awake(true),
-      _backlight_level(255) {}
+Controller::Controller() : _is_awake(true) {}
 
 void Controller::begin() {
     _communication.begin();
@@ -29,7 +27,7 @@ void Controller::begin() {
         _device_config = _config_loader.load_default();
         _config_loader.save(*_device_config);
     }
-    _backlight_level = 255; // TODO: Move to config
+
     init_hardware();
 
     _communication.on_packet = [this](Communication::packet_t packet) {
@@ -64,12 +62,12 @@ void Controller::init_hardware() {
     );
 
     pinMode(_device_config->tft_backlight_pin, OUTPUT);
-    analogWrite(_device_config->tft_backlight_pin, 255); // TODO: Ensure backlight is off during setup
-
+    analogWrite(_device_config->tft_backlight_pin, 0);
+    
     for (auto& segment : _device_config->segments) {
         pinMode(segment.pot_pin, INPUT);
     }
-
+    
     _segments.clear();
     for (size_t i = 0; i < _device_config->segments.size(); i++) {
         _segments.push_back(std::make_unique<Segment>(
@@ -87,6 +85,8 @@ void Controller::init_hardware() {
         segment->load_and_display_image();
         segment->enable_logs(true);
     }
+
+    analogWrite(_device_config->tft_backlight_pin, _device_config->tft_backlight_value);
 }
 
 void Controller::handle_command(Communication::packet_t packet) {
@@ -131,15 +131,17 @@ void Controller::handle_command(Communication::packet_t packet) {
         }
 
         case Command::SET_BACKLIGHT: {
-            _backlight_level = packet.data[0];
-            analogWrite(_device_config->tft_backlight_pin, _backlight_level);
+            _device_config->tft_backlight_value = packet.data[0];
+            analogWrite(_device_config->tft_backlight_pin, _device_config->tft_backlight_value);
+            _config_loader.save(*_device_config);
+            _communication.send_packet(Command::ACK);
             break;
         }
 
         case Command::GET_STATUS: {
             std::vector<uint8_t> status_data;
             status_data.push_back(_is_awake ? 1 : 0);
-            status_data.push_back(_backlight_level);
+            status_data.push_back(_device_config->tft_backlight_value);
             status_data.push_back(_segments.size());
             _communication.send_packet(Command::STATUS_DATA, status_data);
             break;
@@ -154,7 +156,10 @@ void Controller::handle_command(Communication::packet_t packet) {
 void Controller::apply_config_changes(const DeviceConfig &new_config) {
     if (new_config.tft_backlight_pin != _device_config->tft_backlight_pin) {
         pinMode(new_config.tft_backlight_pin, OUTPUT);
-        analogWrite(new_config.tft_backlight_pin, _backlight_level);
+    }
+    if (new_config.tft_backlight_value != _device_config->tft_backlight_value ||
+        new_config.tft_backlight_pin != _device_config->tft_backlight_pin ) {
+        analogWrite(new_config.tft_backlight_pin, new_config.tft_backlight_value);
     }
 
     if (new_config.do_sleep != _device_config->do_sleep) {
@@ -231,7 +236,7 @@ void Controller::on_file_received(const std::string &path) {
 
 void Controller::wake_up() {
     _is_awake = true;
-    analogWrite(_device_config->tft_backlight_pin, _backlight_level);
+    analogWrite(_device_config->tft_backlight_pin, _device_config->tft_backlight_value);
     for (auto& segment : _segments) {
         segment->load_and_display_image();
     }

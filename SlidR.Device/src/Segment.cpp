@@ -58,8 +58,6 @@ bool Segment::load_and_display_image() {
 
     LOG(("Loading image: '" + _image_path + "' (" + std::to_string(img_width) + "x" + std::to_string(img_height) + ")\n").c_str());
 
-    // _tft->fillScreen(ST7735_CYAN);
-
     constexpr size_t CHUNK_SIZE = 256;
     uint16_t pixel_buffer[CHUNK_SIZE];
     size_t total_pixels = img_width * img_height;

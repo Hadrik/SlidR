@@ -19,6 +19,7 @@ struct DeviceConfig {
     int8_t spi_data_pin;
     uint8_t tft_dc_pin;
     uint8_t tft_backlight_pin;
+    uint8_t tft_backlight_value;
     uint32_t spi_speed_hz;
     uint32_t baudrate;
     bool wait_for_serial;

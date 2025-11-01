@@ -37,7 +37,6 @@ private:
     std::vector<std::unique_ptr<Segment>> _segments;
     Communication _communication;
     bool _is_awake;
-    uint8_t _backlight_level;
     TaskHandle_t _segment_task_handle;
     TaskHandle_t _comm_task_handle;
     TaskHandle_t _watchdog_task_handle;
